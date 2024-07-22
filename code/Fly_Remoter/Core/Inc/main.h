@@ -7,7 +7,7 @@
   ******************************************************************************
   * @attention
   *
-  * Copyright (c) 2023 STMicroelectronics.
+  * Copyright (c) 2024 STMicroelectronics.
   * All rights reserved.
   *
   * This software is licensed under terms that can be found in the LICENSE file
@@ -28,6 +28,7 @@ extern "C" {
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f0xx_hal.h"
+
 #include "stm32f0xx_ll_i2c.h"
 #include "stm32f0xx_ll_crs.h"
 #include "stm32f0xx_ll_rcc.h"
@@ -52,7 +53,7 @@ extern "C" {
 
 /* Exported constants --------------------------------------------------------*/
 /* USER CODE BEGIN EC */
-
+extern uint8_t i2c_address[1];
 /* USER CODE END EC */
 
 /* Exported macro ------------------------------------------------------------*/
@@ -68,24 +69,26 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define LEFT_BTN_Pin GPIO_PIN_0
+#define LEFT_BTN_GPIO_Port GPIOF
+#define RIGHT_BTN_Pin GPIO_PIN_1
+#define RIGHT_BTN_GPIO_Port GPIOF
 #define ADC_BAT_Pin GPIO_PIN_0
 #define ADC_BAT_GPIO_Port GPIOA
-#define ADC_X1_Pin GPIO_PIN_1
-#define ADC_X1_GPIO_Port GPIOA
-#define ADC_Y1_Pin GPIO_PIN_2
-#define ADC_Y1_GPIO_Port GPIOA
-#define BTN_1_Pin GPIO_PIN_3
-#define BTN_1_GPIO_Port GPIOA
-#define BTN_2_Pin GPIO_PIN_4
-#define BTN_2_GPIO_Port GPIOA
-#define ADC_Y2_Pin GPIO_PIN_5
-#define ADC_Y2_GPIO_Port GPIOA
-#define ADC_X2_Pin GPIO_PIN_6
-#define ADC_X2_GPIO_Port GPIOA
-#define BTN_B_Pin GPIO_PIN_7
-#define BTN_B_GPIO_Port GPIOA
-#define BTN_A_Pin GPIO_PIN_1
-#define BTN_A_GPIO_Port GPIOB
+#define ADC_BAT_2_Pin GPIO_PIN_1
+#define ADC_BAT_2_GPIO_Port GPIOA
+#define LEFT_SW_X_Pin GPIO_PIN_2
+#define LEFT_SW_X_GPIO_Port GPIOA
+#define LEFT_SW_Y_Pin GPIO_PIN_3
+#define LEFT_SW_Y_GPIO_Port GPIOA
+#define LEFT_SW_B_Pin GPIO_PIN_4
+#define LEFT_SW_B_GPIO_Port GPIOA
+#define RIGHT_SW_Y_Pin GPIO_PIN_5
+#define RIGHT_SW_Y_GPIO_Port GPIOA
+#define RIGHT_SW_X_Pin GPIO_PIN_6
+#define RIGHT_SW_X_GPIO_Port GPIOA
+#define RIGHT_SW_B_Pin GPIO_PIN_7
+#define RIGHT_SW_B_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
 

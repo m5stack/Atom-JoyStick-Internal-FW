@@ -6,7 +6,7 @@
   ******************************************************************************
   * @attention
   *
-  * Copyright (c) 2023 STMicroelectronics.
+  * Copyright (c) 2024 STMicroelectronics.
   * All rights reserved.
   *
   * This software is licensed under terms that can be found in the LICENSE file
@@ -18,21 +18,28 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "adc.h"
+#include "dma.h"
+#include "i2c.h"
+#include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "i2c_ex.h"
+#include <string.h>
 #include "flash.h"
+#include "stm32f0xx_ll_adc.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 typedef enum {
   ADC_BAT,
+  ADC_BAT_2,
 	ADC_X1,
 	ADC_Y1,
   ADC_Y2,
   ADC_X2,
+  ADC_REF_INT,
   ADC_CHN_MAX,
 } ADC1_CHN;
 /* USER CODE END PTD */
@@ -40,11 +47,14 @@ typedef enum {
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define I2C_ADDRESS 0x59
-#define FIRMWARE_VERSION 1
+#define FIRMWARE_VERSION 2
 #define APPLICATION_ADDRESS     ((uint32_t)0x08001000)
+#define BOOTLOADER_VER_ADDR ((uint32_t)0x08001000 - 4)
+uint32_t bootloader_version;
 
 #define ADC_CHANNEL_NUMS                ADC_CHN_MAX
 #define ADC_SAMPLES_NUMS                ADC_CHANNEL_NUMS * 20
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -53,16 +63,18 @@ typedef enum {
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-ADC_HandleTypeDef hadc;
-DMA_HandleTypeDef hdma_adc;
 
 /* USER CODE BEGIN PV */
 uint8_t i2c_address[1] = {0};
 __IO float bat_voltage = 0.0f;
+__IO float bat_2_voltage = 0.0f;
+__IO int32_t bat_voltage_int = 0;
+__IO int32_t bat_2_voltage_int = 0;
 __IO uint32_t uiAdcValueBuf[ADC_SAMPLES_NUMS];
 __IO uint16_t usAdcValue16[ADC_CHANNEL_NUMS];
 __IO uint8_t usAdcValue8[ADC_CHANNEL_NUMS];
 __IO uint8_t fm_version = FIRMWARE_VERSION;
+volatile uint32_t i2c_stop_timeout_delay = 0;
 
 volatile uint8_t flag_jump_bootloader = 0;
 volatile uint32_t jump_bootloader_timeout = 0;
@@ -70,10 +82,6 @@ volatile uint32_t jump_bootloader_timeout = 0;
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-static void MX_GPIO_Init(void);
-static void MX_DMA_Init(void);
-static void MX_ADC_Init(void);
-static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -120,6 +128,19 @@ void i2c_port_set_to_input(void)
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 }
 
+void i2c_address_write_to_flash(void) 
+{   
+  writeMessageToFlash(i2c_address , 1);   
+}
+
+void i2c_address_read_from_flash(void) 
+{   
+  if (!(readPackedMessageFromFlash(i2c_address, 1))) {
+    i2c_address[0] = I2C_ADDRESS;
+    i2c_address_write_to_flash();
+  }
+}
+
 long map(long x, long in_min, long in_max, long out_min, long out_max) {
   long result;
 
@@ -143,88 +164,19 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc) {
     usAdcValue16[i] = (adcTotal[i] / 20);
     usAdcValue8[i] = map(usAdcValue16[i],0,4095,0,255); 
   }
-  bat_voltage = usAdcValue16[ADC_BAT] / 4095.0f * 6.6f;
+  uint32_t ref_int = __LL_ADC_CALC_VREFANALOG_VOLTAGE(usAdcValue16[ADC_REF_INT], LL_ADC_RESOLUTION_12B);
+  bat_voltage_int = usAdcValue16[ADC_BAT] / 4095.0f * ref_int * 2;
+  bat_2_voltage_int = usAdcValue16[ADC_BAT_2] / 4095.0f * ref_int * 2;
 
 	HAL_ADC_Start_DMA(hadc, (uint32_t *)uiAdcValueBuf, ADC_SAMPLES_NUMS);
 }
 
-void user_i2c_init(void)
-{
-  /* USER CODE BEGIN I2C1_Init 0 */
-
-  /* USER CODE END I2C1_Init 0 */
-
-  LL_I2C_InitTypeDef I2C_InitStruct = {0};
-
-  LL_GPIO_InitTypeDef GPIO_InitStruct = {0};
-
-  LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_GPIOA);
-  /**I2C1 GPIO Configuration
-  PA9   ------> I2C1_SCL
-  PA10   ------> I2C1_SDA
-  */
-  GPIO_InitStruct.Pin = LL_GPIO_PIN_9;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_ALTERNATE;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_HIGH;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_OPENDRAIN;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_UP;
-  GPIO_InitStruct.Alternate = LL_GPIO_AF_4;
-  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  GPIO_InitStruct.Pin = LL_GPIO_PIN_10;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_ALTERNATE;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_HIGH;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_OPENDRAIN;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_UP;
-  GPIO_InitStruct.Alternate = LL_GPIO_AF_4;
-  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /* Peripheral clock enable */
-  LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_I2C1);
-
-  /* I2C1 interrupt Init */
-  NVIC_SetPriority(I2C1_IRQn, 0);
-  NVIC_EnableIRQ(I2C1_IRQn);
-
-  /* USER CODE BEGIN I2C1_Init 1 */
-
-  /* USER CODE END I2C1_Init 1 */
-
-  /** I2C Initialization
-  */
-  LL_I2C_DisableOwnAddress2(I2C1);
-  LL_I2C_DisableGeneralCall(I2C1);
-  LL_I2C_EnableClockStretching(I2C1);
-  I2C_InitStruct.PeripheralMode = LL_I2C_MODE_I2C;
-  I2C_InitStruct.Timing = 0x0000020B;
-  I2C_InitStruct.AnalogFilter = LL_I2C_ANALOGFILTER_ENABLE;
-  I2C_InitStruct.DigitalFilter = 0;
-  I2C_InitStruct.OwnAddress1 = i2c_address[0]<<1;
-  I2C_InitStruct.TypeAcknowledge = LL_I2C_ACK;
-  I2C_InitStruct.OwnAddrSize = LL_I2C_OWNADDRESS1_7BIT;
-  LL_I2C_Init(I2C1, &I2C_InitStruct);
-  LL_I2C_EnableAutoEndMode(I2C1);
-  LL_I2C_SetOwnAddress2(I2C1, 0, LL_I2C_OWNADDRESS2_NOMASK);
-  /* USER CODE BEGIN I2C1_Init 2 */
-  set_i2c_slave_address(i2c_address[0]);
-  /* USER CODE END I2C1_Init 2 */
-}
-
-void i2c_address_write_to_flash(void) 
-{   
-  writeMessageToFlash(i2c_address , 1);   
-}
-
-void i2c_address_read_from_flash(void) 
-{   
-  if (!(readPackedMessageFromFlash(i2c_address, 1))) {
-    i2c_address[0] = I2C_ADDRESS;
-    i2c_address_write_to_flash();
-  }
-}
-
 void Slave_Complete_Callback(uint8_t *rx_data, uint16_t len) 
 {
+  uint8_t rx_buf[16];
+  uint8_t tx_buf[32];
+  uint8_t rx_mark[16] = {0}; 
+
   if (len > 1) {
     if (rx_data[0] == 0xFF)
     {
@@ -265,16 +217,12 @@ void Slave_Complete_Callback(uint8_t *rx_data, uint16_t len)
             MX_DMA_Init();
             MX_ADC_Init();          
             user_i2c_init();
+            HAL_ADCEx_Calibration_Start(&hadc);
+            HAL_ADC_Start_DMA(&hadc, (uint32_t *)uiAdcValueBuf, ADC_SAMPLES_NUMS);
             i2c1_it_enable();        
             jump_bootloader_timeout = 0;
           }
         }        
-      }
-    }      
-    else if (rx_data[0] == 0xFC)
-    {
-      if (rx_data[1] == 1) {
-        NVIC_SystemReset();
       }
     }      
   }
@@ -287,76 +235,61 @@ void Slave_Complete_Callback(uint8_t *rx_data, uint16_t len)
     {
       i2c1_set_send_data((uint8_t *)&fm_version, 1);
     } 
-    else if (rx_data[0] <= 1)
+    else if (rx_data[0] == 0xFC)
     {
-      i2c1_set_send_data((uint8_t *)&usAdcValue16[ADC_X1], 2);
-    } 
-    else if ((rx_data[0] >= 2) && (rx_data[0] <= 3))
-    {
-      i2c1_set_send_data((uint8_t *)&usAdcValue16[ADC_Y1], 2);
-    } 
-    else if (rx_data[0] == 0x10)
-    {
-      i2c1_set_send_data((uint8_t *)&usAdcValue8[ADC_X1], 1);
-    } 
-    else if (rx_data[0] == 0x11)
-    {
-      i2c1_set_send_data((uint8_t *)&usAdcValue8[ADC_Y1], 1);
-    } 
-    else if ((rx_data[0] >= 0x20) && (rx_data[0] <= 0x21))
-    {
-      i2c1_set_send_data((uint8_t *)&usAdcValue16[ADC_X2], 2);
-    } 
-    else if ((rx_data[0] >= 0x22) && (rx_data[0] <= 0x23))
-    {
-      i2c1_set_send_data((uint8_t *)&usAdcValue16[ADC_Y2], 2);
-    }
-    else if (rx_data[0] == 0x30)
-    {
-      i2c1_set_send_data((uint8_t *)&usAdcValue8[ADC_X2], 1);
-    } 
-    else if (rx_data[0] == 0x31)
-    {
-      i2c1_set_send_data((uint8_t *)&usAdcValue8[ADC_Y2], 1);
-    }
-    else if ((rx_data[0] >= 0x40) && (rx_data[0] <= 0x41))
-    {
-      i2c1_set_send_data((uint8_t *)&usAdcValue16[ADC_BAT], 2);
-    }
-    else if (rx_data[0] == 0x50)
-    {
-      i2c1_set_send_data((uint8_t *)&usAdcValue8[ADC_BAT], 1);
+      bootloader_version = *(uint8_t*)BOOTLOADER_VER_ADDR;
+      i2c1_set_send_data((uint8_t *)&bootloader_version, 1);
     }    
-    else if ((rx_data[0] >= 0x60) && (rx_data[0] <= 0x61))
+    else if (rx_data[0] <= 0x03)
     {
-      int16_t tx_temp = 0;
-      tx_temp = (int16_t)(bat_voltage * 100.0f);
-      i2c1_set_send_data((uint8_t *)&tx_temp, 2);
-    } 
-    else if (rx_data[0] == 0x70)
+      memcpy(&tx_buf[0], (uint8_t *)&usAdcValue16[ADC_X1], 2);
+      memcpy(&tx_buf[2], (uint8_t *)&usAdcValue16[ADC_Y1], 2);
+      i2c1_set_send_data((uint8_t *)&tx_buf[rx_data[0]-0], 0x03-rx_data[0]+1);       
+    }      
+    else if (rx_data[0] >= 0x10 && rx_data[0] <= 0x11)
     {
-      uint8_t tx_temp = 0;
-      tx_temp = HAL_GPIO_ReadPin(GPIOA, BTN_1_Pin);
-      i2c1_set_send_data((uint8_t *)&tx_temp, 1);
-    }          
-    else if (rx_data[0] == 0x71)
+      tx_buf[0] = usAdcValue8[ADC_X1];
+      tx_buf[1] = usAdcValue8[ADC_Y1];
+      i2c1_set_send_data((uint8_t *)&tx_buf[rx_data[0]-0x10], 0x11-rx_data[0]+1);       
+    }      
+    else if (rx_data[0] >= 0x20 && rx_data[0] <= 0x23)
     {
-      uint8_t tx_temp = 0;
-      tx_temp = HAL_GPIO_ReadPin(GPIOA, BTN_2_Pin);
-      i2c1_set_send_data((uint8_t *)&tx_temp, 1);
-    }          
-    else if (rx_data[0] == 0x72)
+      memcpy(&tx_buf[0], (uint8_t *)&usAdcValue16[ADC_X2], 2);
+      memcpy(&tx_buf[2], (uint8_t *)&usAdcValue16[ADC_Y2], 2);
+      i2c1_set_send_data((uint8_t *)&tx_buf[rx_data[0]-0x20], 0x23-rx_data[0]+1);       
+    }      
+    else if (rx_data[0] >= 0x30 && rx_data[0] <= 0x31)
     {
-      uint8_t tx_temp = 0;
-      tx_temp = HAL_GPIO_ReadPin(BTN_A_GPIO_Port, BTN_A_Pin);
-      i2c1_set_send_data((uint8_t *)&tx_temp, 1);
-    }          
-    else if (rx_data[0] == 0x73)
+      tx_buf[0] = usAdcValue8[ADC_X2];
+      tx_buf[1] = usAdcValue8[ADC_Y2];
+      i2c1_set_send_data((uint8_t *)&tx_buf[rx_data[0]-0x30], 0x31-rx_data[0]+1);       
+    }      
+    else if (rx_data[0] >= 0x40 && rx_data[0] <= 0x43)
     {
-      uint8_t tx_temp = 0;
-      tx_temp = HAL_GPIO_ReadPin(GPIOA, BTN_B_Pin);
-      i2c1_set_send_data((uint8_t *)&tx_temp, 1);
-    }          
+      memcpy(&tx_buf[0], (uint8_t *)&usAdcValue16[ADC_BAT], 2);
+      memcpy(&tx_buf[2], (uint8_t *)&usAdcValue16[ADC_BAT_2], 2);
+      i2c1_set_send_data((uint8_t *)&tx_buf[rx_data[0]-0x40], 0x43-rx_data[0]+1);       
+    }    
+    else if (rx_data[0] >= 0x50 && rx_data[0] <= 0x51)
+    {
+      tx_buf[0] = usAdcValue8[ADC_BAT];
+      tx_buf[1] = usAdcValue8[ADC_BAT_2];
+      i2c1_set_send_data((uint8_t *)&tx_buf[rx_data[0]-0x50], 0x51-rx_data[0]+1);       
+    }    
+    else if (rx_data[0] >= 0x60 && rx_data[0] <= 0x63)
+    {
+      memcpy(&tx_buf[0], (uint8_t *)&bat_voltage_int, 2);
+      memcpy(&tx_buf[2], (uint8_t *)&bat_2_voltage_int, 2);
+      i2c1_set_send_data((uint8_t *)&tx_buf[rx_data[0]-0x60], 0x63-rx_data[0]+1);       
+    }       
+    else if (rx_data[0] >= 0x70 && rx_data[0] <= 0x73)
+    {
+      tx_buf[0] = HAL_GPIO_ReadPin(LEFT_BTN_GPIO_Port, LEFT_BTN_Pin);
+      tx_buf[1] = HAL_GPIO_ReadPin(RIGHT_BTN_GPIO_Port, RIGHT_BTN_Pin);
+      tx_buf[2] = HAL_GPIO_ReadPin(LEFT_SW_B_GPIO_Port, LEFT_SW_B_Pin);
+      tx_buf[3] = HAL_GPIO_ReadPin(RIGHT_SW_B_GPIO_Port, RIGHT_SW_B_Pin);
+      i2c1_set_send_data((uint8_t *)&tx_buf[rx_data[0]-0x70], 0x73-rx_data[0]+1);       
+    }       
   }
 }
 /* USER CODE END 0 */
@@ -384,7 +317,7 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-  HAL_Delay(1000);
+
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
@@ -397,13 +330,29 @@ int main(void)
   HAL_ADCEx_Calibration_Start(&hadc);
   HAL_ADC_Start_DMA(&hadc, (uint32_t *)uiAdcValueBuf, ADC_SAMPLES_NUMS);
   user_i2c_init();
-  i2c1_it_enable();  
+  i2c1_it_enable(); 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    i2c_timeout_counter = 0;
+    if (i2c_stop_timeout_flag) {
+      if (i2c_stop_timeout_delay < HAL_GetTick()) {
+        i2c_stop_timeout_counter++;
+        i2c_stop_timeout_delay = HAL_GetTick() + 10;
+      }
+    }
+    if (i2c_stop_timeout_counter > 50) {
+      LL_I2C_DeInit(I2C1);
+      LL_I2C_DisableAutoEndMode(I2C1);
+      LL_I2C_Disable(I2C1);
+      LL_I2C_DisableIT_ADDR(I2C1);     
+      user_i2c_init();    
+      i2c1_it_enable();
+      HAL_Delay(500);
+    }     
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -462,209 +411,7 @@ void SystemClock_Config(void)
     Error_Handler();
   }
   LL_RCC_HSI14_EnableADCControl();
-  LL_RCC_SetI2CClockSource(LL_RCC_I2C1_CLKSOURCE_HSI);
-}
-
-/**
-  * @brief ADC Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_ADC_Init(void)
-{
-
-  /* USER CODE BEGIN ADC_Init 0 */
-
-  /* USER CODE END ADC_Init 0 */
-
-  ADC_ChannelConfTypeDef sConfig = {0};
-
-  /* USER CODE BEGIN ADC_Init 1 */
-
-  /* USER CODE END ADC_Init 1 */
-
-  /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
-  */
-  hadc.Instance = ADC1;
-  hadc.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
-  hadc.Init.Resolution = ADC_RESOLUTION_12B;
-  hadc.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc.Init.ScanConvMode = ADC_SCAN_DIRECTION_FORWARD;
-  hadc.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
-  hadc.Init.LowPowerAutoWait = DISABLE;
-  hadc.Init.LowPowerAutoPowerOff = DISABLE;
-  hadc.Init.ContinuousConvMode = ENABLE;
-  hadc.Init.DiscontinuousConvMode = DISABLE;
-  hadc.Init.ExternalTrigConv = ADC_SOFTWARE_START;
-  hadc.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
-  hadc.Init.DMAContinuousRequests = ENABLE;
-  hadc.Init.Overrun = ADC_OVR_DATA_PRESERVED;
-  if (HAL_ADC_Init(&hadc) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure for the selected ADC regular channel to be converted.
-  */
-  sConfig.Channel = ADC_CHANNEL_0;
-  sConfig.Rank = ADC_RANK_CHANNEL_NUMBER;
-  sConfig.SamplingTime = ADC_SAMPLETIME_239CYCLES_5;
-  if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure for the selected ADC regular channel to be converted.
-  */
-  sConfig.Channel = ADC_CHANNEL_1;
-  if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure for the selected ADC regular channel to be converted.
-  */
-  sConfig.Channel = ADC_CHANNEL_2;
-  if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure for the selected ADC regular channel to be converted.
-  */
-  sConfig.Channel = ADC_CHANNEL_5;
-  if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /** Configure for the selected ADC regular channel to be converted.
-  */
-  sConfig.Channel = ADC_CHANNEL_6;
-  if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN ADC_Init 2 */
-
-  /* USER CODE END ADC_Init 2 */
-
-}
-
-/**
-  * @brief I2C1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_I2C1_Init(void)
-{
-
-  /* USER CODE BEGIN I2C1_Init 0 */
-
-  /* USER CODE END I2C1_Init 0 */
-
-  LL_I2C_InitTypeDef I2C_InitStruct = {0};
-
-  LL_GPIO_InitTypeDef GPIO_InitStruct = {0};
-
-  LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_GPIOA);
-  /**I2C1 GPIO Configuration
-  PA9   ------> I2C1_SCL
-  PA10   ------> I2C1_SDA
-  */
-  GPIO_InitStruct.Pin = LL_GPIO_PIN_9;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_ALTERNATE;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_HIGH;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_OPENDRAIN;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  GPIO_InitStruct.Alternate = LL_GPIO_AF_4;
-  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  GPIO_InitStruct.Pin = LL_GPIO_PIN_10;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_ALTERNATE;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_HIGH;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_OPENDRAIN;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  GPIO_InitStruct.Alternate = LL_GPIO_AF_4;
-  LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /* Peripheral clock enable */
-  LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_I2C1);
-
-  /* I2C1 interrupt Init */
-  NVIC_SetPriority(I2C1_IRQn, 0);
-  NVIC_EnableIRQ(I2C1_IRQn);
-
-  /* USER CODE BEGIN I2C1_Init 1 */
-
-  /* USER CODE END I2C1_Init 1 */
-
-  /** I2C Initialization
-  */
-  LL_I2C_DisableOwnAddress2(I2C1);
-  LL_I2C_DisableGeneralCall(I2C1);
-  LL_I2C_EnableClockStretching(I2C1);
-  I2C_InitStruct.PeripheralMode = LL_I2C_MODE_I2C;
-  I2C_InitStruct.Timing = 0x0000020B;
-  I2C_InitStruct.AnalogFilter = LL_I2C_ANALOGFILTER_ENABLE;
-  I2C_InitStruct.DigitalFilter = 0;
-  I2C_InitStruct.OwnAddress1 = 0x59<<1;
-  I2C_InitStruct.TypeAcknowledge = LL_I2C_ACK;
-  I2C_InitStruct.OwnAddrSize = LL_I2C_OWNADDRESS1_7BIT;
-  LL_I2C_Init(I2C1, &I2C_InitStruct);
-  LL_I2C_EnableAutoEndMode(I2C1);
-  LL_I2C_SetOwnAddress2(I2C1, 0, LL_I2C_OWNADDRESS2_NOMASK);
-  /* USER CODE BEGIN I2C1_Init 2 */
-  set_i2c_slave_address(i2c_address[0]);
-  /* USER CODE END I2C1_Init 2 */
-
-}
-
-/**
-  * Enable DMA controller clock
-  */
-static void MX_DMA_Init(void)
-{
-
-  /* DMA controller clock enable */
-  __HAL_RCC_DMA1_CLK_ENABLE();
-
-  /* DMA interrupt init */
-  /* DMA1_Channel1_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 1, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
-
-}
-
-/**
-  * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_GPIO_Init(void)
-{
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-/* USER CODE BEGIN MX_GPIO_Init_1 */
-/* USER CODE END MX_GPIO_Init_1 */
-
-  /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_GPIOB_CLK_ENABLE();
-
-  /*Configure GPIO pins : BTN_1_Pin BTN_2_Pin BTN_B_Pin */
-  GPIO_InitStruct.Pin = BTN_1_Pin|BTN_2_Pin|BTN_B_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : BTN_A_Pin */
-  GPIO_InitStruct.Pin = BTN_A_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(BTN_A_GPIO_Port, &GPIO_InitStruct);
-
-/* USER CODE BEGIN MX_GPIO_Init_2 */
-/* USER CODE END MX_GPIO_Init_2 */
+  LL_RCC_SetI2CClockSource(LL_RCC_I2C1_CLKSOURCE_SYSCLK);
 }
 
 /* USER CODE BEGIN 4 */

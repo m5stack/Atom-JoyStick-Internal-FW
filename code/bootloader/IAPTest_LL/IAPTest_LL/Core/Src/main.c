@@ -40,7 +40,9 @@ typedef enum {NOEVENT = 0, //not enevt happen
 /* USER CODE BEGIN PD */
 typedef  void (*pFunction)(void);
 /*this address is define */
-#define APPLICATION_ADDRESS  0x08001000  
+#define APPLICATION_ADDRESS     ((uint32_t)0x08001000)
+#define FW_LENGTH (((uint32_t)0x3000) - ((uint32_t)0x400))
+#define FW_CRC_ADDR (((uint32_t)0x08004000) - ((uint32_t)0x400) - 4)
 
 /* Error codes used to make the red led blinking */
 #define ERROR_ERASE 0x01
@@ -115,12 +117,39 @@ uint8_t opcode;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_I2C1_Init(void);
+static void MX_CRC_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+uint32_t My_CRC(uint8_t *buffer, uint32_t buffer_legnth){
+  uint32_t i;
+  uint32_t temp = 0;
+  LL_CRC_ResetCRCCalculationUnit(CRC);
+  for (i = 0; i < buffer_legnth; i++) {
+    LL_CRC_FeedData8(CRC,buffer[i]);
+  }
+  temp = (LL_CRC_ReadData32(CRC) ^ 0xffffffff) ;
+  return temp;
+}
+
+uint8_t compute_fw_crc32(void)
+{
+    uint32_t crcsum, crc_read, len;
+    uint8_t *pdata = (uint8_t*)APPLICATION_ADDRESS;
+
+    len = FW_LENGTH - 4;
+    crc_read = *(uint32_t*)FW_CRC_ADDR;
+
+    crcsum = My_CRC(pdata, len);
+
+    if (crc_read == crcsum)
+        return 1;
+    else
+        return 0;
+}
 /**
   * Brief   This function handles I2C1 interrupt request.
   * Param   None
@@ -225,6 +254,7 @@ void Reset_AllPeriph(void)
 
 void Jump_APP(void)
 {
+  if (compute_fw_crc32()) {
       /*check the application address context whether avilible*/
                 if (((*(__IO uint32_t*)APPLICATION_ADDRESS) & 0x2FFE0000 ) == 0x20000000)
                 {
@@ -236,7 +266,7 @@ void Jump_APP(void)
                   __set_MSP(*(__IO uint32_t*) APPLICATION_ADDRESS);
                   JumpToApplication();
                 }
-
+  }
 
 }
 
@@ -382,6 +412,7 @@ int main(void)
   /* Initialize all configured peripherals */
   // MX_GPIO_Init();
   // MX_I2C1_Init();
+  MX_CRC_Init();
   /* USER CODE BEGIN 2 */
   iap_gpio_init();
 
@@ -395,6 +426,10 @@ int main(void)
   } else {
     Jump_APP();
   }
+  MX_I2C1_Init();
+  LL_I2C_Enable(I2C1);
+  LL_I2C_EnableIT_ADDR(I2C1);      
+  iap_i2c();
   
   // if ((GPIOA->IDR & 0x0000020)==0x0000020) {
   //   iap_i2c();     
@@ -464,6 +499,33 @@ void SystemClock_Config(void)
   LL_Init1msTick(8000000);
   LL_SetSystemCoreClock(8000000);
   LL_RCC_SetI2CClockSource(LL_RCC_I2C1_CLKSOURCE_HSI);
+}
+
+/**
+  * @brief CRC Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_CRC_Init(void)
+{
+
+  /* USER CODE BEGIN CRC_Init 0 */
+
+  /* USER CODE END CRC_Init 0 */
+
+  /* Peripheral clock enable */
+  LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_CRC);
+
+  /* USER CODE BEGIN CRC_Init 1 */
+
+  /* USER CODE END CRC_Init 1 */
+  LL_CRC_SetInputDataReverseMode(CRC, LL_CRC_INDATA_REVERSE_BYTE);
+  LL_CRC_SetOutputDataReverseMode(CRC, LL_CRC_OUTDATA_REVERSE_BIT);
+  LL_CRC_SetInitialData(CRC, 0xffffffff);
+  /* USER CODE BEGIN CRC_Init 2 */
+
+  /* USER CODE END CRC_Init 2 */
+
 }
 
 /**
